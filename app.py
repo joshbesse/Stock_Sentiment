@@ -10,7 +10,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pandas as pd
 import altair as alt
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_price_data(ticker, days):
     try:
         end_date = datetime.date.today()
@@ -32,7 +32,7 @@ def get_sentiment(text, analyzer):
     score = analyzer.polarity_scores(text)["compound"]
     return round(score, 2)
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_headlines(ticker, days):
     api_key = os.getenv("NEWSAPI_KEY") or st.secrets["newsapi"]["key"]
     url = "https://newsapi.org/v2/everything"
@@ -66,7 +66,7 @@ def fetch_headlines(ticker, days):
             "sentiment": get_sentiment(article["title"], analyzer)
         })
     
-    return headlines, headlines[:20]
+    return headlines, headlines[:10]
 
 def init_reddit_client():
     client_id = os.getenv("REDDIT_CLIENT_ID") or st.secrets["praw"]["reddit_client_id"]
@@ -79,7 +79,7 @@ def init_reddit_client():
         user_agent=user_agent
     )
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_reddit_posts(ticker, days, limit_per_sub=50):
     reddit = init_reddit_client()
     subreddits = ["stocks", "investing", "StockMarket"]
@@ -105,7 +105,7 @@ def fetch_reddit_posts(ticker, days, limit_per_sub=50):
     
     posts_sorted = sorted(posts, key=lambda x: x["created"], reverse=True)
     
-    return posts, posts_sorted[:20]
+    return posts, posts_sorted[:10]
 
 def render_headlines(headlines):
     for headline in headlines:
@@ -224,54 +224,58 @@ top_posts = None
 # initialize VADER model
 analyzer = SentimentIntensityAnalyzer()
 
-# set page layout
-c1, c2 = st.columns([1, 1])
+# remove top white space
+st.markdown("""
+    <style>
+        .block-container {
+            padding-top: 2.5rem;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-with c1:
-    # header
-    st.markdown("<h2>Stock Price + Sentiment Dashboard</h2>", unsafe_allow_html=True)
+# title
+st.markdown("<h3>Stock Price + Sentiment Dashboard</h3>", unsafe_allow_html=True)
 
-    with st.container():
-        # graph placeholder
-        graph = st.empty()
+# search bar
+with st.container():
+    search_col1, spacer1, search_col2, spacer2, search_col3 = st.columns([2, 0.3, 2.5, 0.3, 0.8])
+    with search_col1:
+        ticker = st.text_input("Enter stock ticker (e.g. AAPL, AMZN)", "", 5).upper()
+    with search_col2:
+        days = st.slider("Select number of past days to look at", min_value=1, max_value=365, value=30)
+    with search_col3:
+        st.markdown("<div style='padding-top: 28px'></div>", unsafe_allow_html=True)
+        submit = st.button("Submit")
 
-        # form
-        with st.form("ticker_input"):
-            ticker = st.text_input("Enter stock ticker (e.g. AAPL, AMZN)", None, 5)
-            days = st.slider("Select number of past days to look at", min_value=1, max_value=365, value=30)
-            submitted = st.form_submit_button("Submit")
+# divider
+st.markdown("""
+<hr style='border: 1px solid #ccc; margin: -7px 0;' />
+""", unsafe_allow_html=True)
 
-        if submitted:
-            if ticker is None:
-                st.error("Invalid ticker or no data found.")
-            else: 
-                with st.spinner(f"Fetching data for {ticker.upper()}..."):
-                    close_prices = fetch_price_data(ticker, days)
-                    if close_prices is None:
-                        st.error("Invalid ticker or no data found.")
-                    else:
-                        all_headlines, top_headlines = fetch_headlines(ticker, days)
-                        all_posts, top_posts = fetch_reddit_posts(ticker, days)
-                        sentiment = sentiment_over_time(all_headlines, all_posts, days)
+# data fetching and rendering
+if submit:
+    with st.spinner(f"Fetching data for {ticker}..."):
+        close_prices = fetch_price_data(ticker, days)
+        if close_prices is None:
+            st.error("Invalid ticker or no data found.")
+        else:
+            all_headlines, top_headlines = fetch_headlines(ticker, days)
+            all_posts, top_posts = fetch_reddit_posts(ticker, days)
+            sentiment = sentiment_over_time(all_headlines, all_posts, days)
 
-                        with graph:
-                            gt1, gt2, gt3 = st.tabs(["Price", "Sentiment", "Price + Sentiment"])
-                            with gt1:
-                                st.altair_chart(make_price_chart(close_prices.reset_index(), ticker), use_container_width=True)
-                            
-                            with gt2:
-                                st.altair_chart(make_sentiment_chart(sentiment, ticker), use_container_width=True)
-
-                            with gt3:
-                                st.altair_chart(make_overlay_chart(close_prices.reset_index(), sentiment, ticker), use_container_width=True)
-
-                        st.success(f"Showing closing prices for {ticker.upper()} over the past {days} days.")
-
-with c2:
-    t1, t2 = st.tabs(["Recent Headlines", "Recent Reddit Posts"])
-    with t1:
-        if top_headlines:
-            render_headlines(top_headlines)
-    with t2:
-        if top_posts:
-            render_reddit_posts(top_posts)
+            chart_col, info_col = st.columns([1, 1])
+            with chart_col:
+                ct1, ct2, ct3 = st.tabs([f"{ticker} Price", "Sentiment", "Price + Sentiment"])
+                with ct1:
+                    st.altair_chart(make_price_chart(close_prices.reset_index(), ticker), use_container_width=True)
+                with ct2:
+                    st.altair_chart(make_sentiment_chart(sentiment, ticker), use_container_width=True)
+                with ct3:
+                    st.altair_chart(make_overlay_chart(close_prices.reset_index(), sentiment, ticker), use_container_width=True)
+            
+            with info_col:
+                it1, it2 = st.tabs(["Recent Headlines", "Recent Reddit Posts"])
+                with it1:
+                    render_headlines(top_headlines)
+                with it2:
+                    render_reddit_posts(top_posts)
