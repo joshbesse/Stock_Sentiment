@@ -10,20 +10,21 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pandas as pd
 import altair as alt
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_price_data(ticker, days):
-    try:
-        end_date = datetime.date.today()
-        start_date = end_date - datetime.timedelta(days)
+    end_date = datetime.date.today()
+    start_date = end_date - datetime.timedelta(days)
 
-        df = yf.download(ticker, start_date, end_date)
+    df = yf.download(ticker, start_date, end_date)
 
-        if df.empty:
-            return None
-        
-        return df['Close'].round(2)
-    except Exception as e:
-        return None
+    if df.empty:
+        return None, None
+    
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    company_name = info.get("longName") or info.get("shortName")
+    
+    return df['Close'].round(2), company_name
 
 def get_sentiment(text, analyzer):
     if not text or not isinstance(text, str):
@@ -32,8 +33,8 @@ def get_sentiment(text, analyzer):
     score = analyzer.polarity_scores(text)["compound"]
     return round(score, 2)
 
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_headlines(ticker, days):
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_headlines(ticker, days, company_name):
     api_key = os.getenv("NEWSAPI_KEY") or st.secrets["newsapi"]["key"]
     url = "https://newsapi.org/v2/everything"
     days = min(days, 30)
@@ -42,7 +43,8 @@ def fetch_headlines(ticker, days):
     from_date = (today - datetime.timedelta(days)).strftime('%Y-%m-%d')
 
     params={
-        "q": ticker,
+        "qInTitle": ticker,
+        "q": f'"{ticker}" AND ("{company_name}" OR stock OR earnings OR shares)',
         "from": from_date,
         "sortBy": "publishedAt",
         "language": "en",
@@ -79,15 +81,24 @@ def init_reddit_client():
         user_agent=user_agent
     )
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_reddit_posts(ticker, days, limit_per_sub=50):
     reddit = init_reddit_client()
     subreddits = ["stocks", "investing", "StockMarket"]
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days)
 
+    if days <= 1:
+        time_filter = "day"
+    elif days <= 7:
+        time_filter = "week"
+    else:
+        time_filter = "month"
+
+    query = f'"{ticker}" OR "${ticker}"'
+
     posts = []
     for sub in subreddits:
-        for post in reddit.subreddit(sub).search(ticker, sort="new", time_filter="month", limit=limit_per_sub):
+        for post in reddit.subreddit(sub).search(query, sort="new", time_filter=time_filter, limit=limit_per_sub):
             created_time = datetime.datetime.fromtimestamp(post.created_utc, tz=datetime.timezone.utc)
             if created_time < cutoff:
                 continue
@@ -254,28 +265,31 @@ st.markdown("""
 
 # data fetching and rendering
 if submit:
-    with st.spinner(f"Fetching data for {ticker}..."):
-        close_prices = fetch_price_data(ticker, days)
-        if close_prices is None:
-            st.error("Invalid ticker or no data found.")
-        else:
-            all_headlines, top_headlines = fetch_headlines(ticker, days)
-            all_posts, top_posts = fetch_reddit_posts(ticker, days)
-            sentiment = sentiment_over_time(all_headlines, all_posts, days)
+    if ticker == "":
+        st.error("Invalid ticker or no data found.")
+    else:
+        with st.spinner(f"Fetching data for {ticker}..."):
+            close_prices, company_name = fetch_price_data(ticker, days)
+            if close_prices is None:
+                st.error("Invalid ticker or no data found.")
+            else:
+                all_headlines, top_headlines = fetch_headlines(ticker, days, company_name)
+                all_posts, top_posts = fetch_reddit_posts(ticker, days)
+                sentiment = sentiment_over_time(all_headlines, all_posts, days)
 
-            chart_col, info_col = st.columns([1, 1])
-            with chart_col:
-                ct1, ct2, ct3 = st.tabs([f"{ticker} Price", "Sentiment", "Price + Sentiment"])
-                with ct1:
-                    st.altair_chart(make_price_chart(close_prices.reset_index(), ticker), use_container_width=True)
-                with ct2:
-                    st.altair_chart(make_sentiment_chart(sentiment, ticker), use_container_width=True)
-                with ct3:
-                    st.altair_chart(make_overlay_chart(close_prices.reset_index(), sentiment, ticker), use_container_width=True)
-            
-            with info_col:
-                it1, it2 = st.tabs(["Recent Headlines", "Recent Reddit Posts"])
-                with it1:
-                    render_headlines(top_headlines)
-                with it2:
-                    render_reddit_posts(top_posts)
+                chart_col, info_col = st.columns([1, 1])
+                with chart_col:
+                    ct1, ct2, ct3 = st.tabs([f"{ticker} Price", "Sentiment", "Price + Sentiment"])
+                    with ct1:
+                        st.altair_chart(make_price_chart(close_prices.reset_index(), ticker), use_container_width=True)
+                    with ct2:
+                        st.altair_chart(make_sentiment_chart(sentiment, ticker), use_container_width=True)
+                    with ct3:
+                        st.altair_chart(make_overlay_chart(close_prices.reset_index(), sentiment, ticker), use_container_width=True)
+                
+                with info_col:
+                    it1, it2 = st.tabs(["Recent Headlines", "Recent Reddit Posts"])
+                    with it1:
+                        render_headlines(top_headlines)
+                    with it2:
+                        render_reddit_posts(top_posts)
