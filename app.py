@@ -6,9 +6,9 @@ import streamlit as st
 import yfinance as yf
 import requests
 import praw
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import pandas as pd
 import altair as alt
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_price_data(ticker, days):
@@ -26,24 +26,12 @@ def fetch_price_data(ticker, days):
     
     return df['Close'].round(2), company_name
 
-@st.cache_resource(show_spinner=False)
-def load_finbert():
-    tokenizer = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-    model = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
-    return pipeline("sentiment-analysis", model=model, tokenizer=tokenizer)
-
-def get_sentiment(text):
+def get_sentiment(text, analyzer):
     if not text or not isinstance(text, str):
         return 0.0
-    
-    result = finbert(text[:512])[0]
-    label = result['label']
-    if label == "Positive":
-        return 1.0
-    elif label == "Negative":
-        return -1.0
-    else:
-        return 0.0
+
+    score = analyzer.polarity_scores(text)["compound"]
+    return round(score, 2)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_headlines(ticker, days, company_name):
@@ -77,7 +65,7 @@ def fetch_headlines(ticker, days, company_name):
             "timestamp": pd.to_datetime(article["publishedAt"]).strftime('%Y-%m-%d'),
             "source": article["source"]["name"],
             "url": article["url"],
-            "sentiment": get_sentiment(article["title"])
+            "sentiment": get_sentiment(article["title"], analyzer)
         })
     
     return headlines, headlines[:10]
@@ -122,7 +110,7 @@ def fetch_reddit_posts(ticker, days, limit_per_sub=50):
                 "created": pd.to_datetime(post.created_utc, unit='s').strftime('%Y-%m-%d'),
                 "url": post.url,
                 "subreddit": sub,
-                "sentiment": get_sentiment(post.title + " " + post.selftext)
+                "sentiment": get_sentiment(post.title + " " + post.selftext, analyzer)
             })
         time.sleep(1)
     
@@ -132,9 +120,9 @@ def fetch_reddit_posts(ticker, days, limit_per_sub=50):
 
 def render_headlines(headlines):
     for headline in headlines:
-        if headline['sentiment'] == 1.0:
+        if headline['sentiment'] >= 0.3:
             sentiment = "Positive"
-        elif headline['sentiment'] == -1.0:
+        elif headline['sentiment'] <= -0.3:
             sentiment = "Negative"
         else:
             sentiment = "Neutral"
@@ -144,9 +132,9 @@ def render_headlines(headlines):
 
 def render_reddit_posts(posts):
     for post in posts:
-        if post['sentiment'] == 1.0:
+        if post['sentiment'] >= 0.3:
             sentiment = "Positive"
-        elif post['sentiment'] == -1.0:
+        elif post['sentiment'] <= 0.3:
             sentiment = "Negative"
         else:
             sentiment = "Neutral"
@@ -245,7 +233,7 @@ top_headlines = None
 top_posts = None
 
 # initialize VADER model
-finbert = load_finbert()
+analyzer = SentimentIntensityAnalyzer()
 
 # remove top white space
 st.markdown("""
