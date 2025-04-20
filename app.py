@@ -24,7 +24,7 @@ def fetch_price_data(ticker, days):
     info = stock.info
     company_name = info.get("longName") or info.get("shortName")
     
-    return df['Close'].round(2), company_name
+    return df['Close'].round(2).reset_index(), company_name
 
 def get_sentiment(text, analyzer):
     if not text or not isinstance(text, str):
@@ -218,6 +218,17 @@ def make_overlay_chart(df_price, df_sentiment, ticker):
 
     return chart
 
+def price_sentiment_correlation(df_price, df_sentiment, ticker):
+    df = pd.merge(df_price, df_sentiment, on="Date")
+    df["price_change"] = df[ticker].pct_change()
+    df["next_day_price_change"] = df["price_change"].shift(-1)
+    df = df.dropna()
+
+    if len(df) >= 2:
+        return round(df["sentiment"].corr(df["next_day_price_change"]), 2)
+
+    return None
+
 # set environment variables
 load_dotenv()
 
@@ -281,11 +292,16 @@ if submit:
                 with chart_col:
                     ct1, ct2, ct3 = st.tabs([f"Price", "Sentiment", "Price + Sentiment"])
                     with ct1:
-                        st.altair_chart(make_price_chart(close_prices.reset_index(), ticker), use_container_width=True)
+                        st.altair_chart(make_price_chart(close_prices, ticker), use_container_width=True)
                     with ct2:
                         st.altair_chart(make_sentiment_chart(sentiment, ticker), use_container_width=True)
                     with ct3:
-                        st.altair_chart(make_overlay_chart(close_prices.reset_index(), sentiment, ticker), use_container_width=True)
+                        st.altair_chart(make_overlay_chart(close_prices, sentiment, ticker), use_container_width=True)
+                        correlation = price_sentiment_correlation(close_prices, sentiment, ticker)
+                        if correlation is not None:
+                            st.markdown(f"**Correlation between sentiment and next-day price change:** `{correlation}`")
+                        else:
+                            st.markdown("Not enough data to compute sentiment-price correlation.")
                 
                 with info_col:
                     it1, it2 = st.tabs(["Recent Headlines", "Recent Reddit Posts"])
